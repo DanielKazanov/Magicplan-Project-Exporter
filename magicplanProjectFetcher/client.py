@@ -283,28 +283,58 @@ def summarize_plan(plan_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Pull out the most useful layout entities from the raw plan payload.
 
-    The raw_plan is still saved in full. This summary is just for easier
-    inspection in the terminal and downstream processing.
+    Magicplan stores windows, doors, and other wall-mounted objects under
+    wall_items, not always under separate top-level windows/doors lists.
     """
 
     floors = find_nested_lists_by_key(plan_payload, "floors")
     rooms = find_nested_lists_by_key(plan_payload, "rooms")
     walls = find_nested_lists_by_key(plan_payload, "walls")
+
     objects = find_nested_lists_by_key(plan_payload, "objects")
+    wall_items = find_nested_lists_by_key(plan_payload, "wall_items")
+
     doors = find_nested_lists_by_key(plan_payload, "doors")
     windows = find_nested_lists_by_key(plan_payload, "windows")
+
+    sliding_windows = [
+        item for item in wall_items
+        if is_sliding_window(item)
+    ]
+
+    shyld_devices_from_objects = [
+        item for item in objects
+        if is_shyld_device(item)
+    ]
+
+    shyld_devices_from_wall_items = [
+        item for item in wall_items
+        if is_shyld_device(item)
+    ]
+
+    shyld_devices = dedupe_items_by_uid(
+        shyld_devices_from_objects + shyld_devices_from_wall_items
+    )
+
+    if not windows:
+        windows = sliding_windows
 
     return {
         "floor_count": len(floors),
         "room_count": len(rooms),
         "wall_count": len(walls),
         "object_count": len(objects),
-        "door_count": len(doors),
+        "wall_item_count": len(wall_items),
+        "shyld_device_count": len(shyld_devices),
         "window_count": len(windows),
+        "door_count": len(doors),
+
         "floors": floors,
         "rooms": rooms,
         "walls": walls,
         "objects": objects,
+        "wall_items": wall_items,
+        "shyld_devices": shyld_devices,
         "doors": doors,
         "windows": windows,
     }
@@ -333,3 +363,66 @@ def find_nested_lists_by_key(payload: Any, target_key: str) -> List[Dict[str, An
             results.extend(find_nested_lists_by_key(item, target_key))
 
     return results
+
+def get_symbol_id(item: Dict[str, Any]) -> str:
+    symbol = item.get("symbol")
+
+    if isinstance(symbol, dict):
+        value = symbol.get("id")
+        return str(value).strip().lower() if value else ""
+
+    return ""
+
+
+def get_symbol_name(item: Dict[str, Any]) -> str:
+    symbol = item.get("symbol")
+
+    if isinstance(symbol, dict):
+        value = symbol.get("name")
+        return str(value).strip().lower() if value else ""
+
+    name = item.get("name") or item.get("label") or item.get("title")
+    return str(name).strip().lower() if name else ""
+
+
+def is_sliding_window(item: Dict[str, Any]) -> bool:
+    symbol_id = get_symbol_id(item)
+    symbol_name = get_symbol_name(item)
+
+    return (
+        symbol_id in {"windowssliding", "windowsliding", "windows_sliding"}
+        or symbol_name == "sliding window"
+        or "sliding window" in symbol_name
+    )
+
+
+def is_shyld_device(item: Dict[str, Any]) -> bool:
+    symbol_id = get_symbol_id(item)
+    symbol_name = get_symbol_name(item)
+
+    return (
+        symbol_name == "shyld device"
+        or "shyld device" in symbol_name
+        or "shyld" in symbol_id
+    )
+
+
+def dedupe_items_by_uid(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    deduped = []
+
+    for item in items:
+        item_id = (
+            item.get("uid")
+            or item.get("id")
+            or item.get("uuid")
+            or json.dumps(item, sort_keys=True)
+        )
+
+        if item_id in seen:
+            continue
+
+        seen.add(item_id)
+        deduped.append(item)
+
+    return deduped
